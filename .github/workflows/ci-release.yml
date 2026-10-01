@@ -23,13 +23,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.8'
+          go-version: '1.27.1'
           cache: false
       - name: Unit tests and packaging checks
         run: |
           go test -race ./...
           go vet ./...
-          python3 -m unittest discover -s scripts -p 'test_*.py' -v
           for script in scripts/*.sh; do bash -n "$script"; done
 
   native:
@@ -41,12 +40,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - runner: macos-26
             arch: arm64
             source: '1'
-          - runner: macos-15-intel
-            arch: amd64
-            source: '0'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -55,14 +51,11 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.8'
+          go-version: '1.27.1'
           cache: false
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: '1.98.1'
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
       - name: Native build, architecture/dependency audit, isolated launchd smoke
         env:
           PACKAGE_SOURCE: ${{ matrix.source }}
@@ -94,6 +87,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: native-*
@@ -101,8 +98,8 @@ jobs:
           merge-multiple: true
       - name: Prepare exact release metadata
         run: |
-          python3 scripts/release.py manifest "${GITHUB_REF_NAME#v}"
-          python3 scripts/release.py checksums
+          go run ./cmd/release-tool manifest "${GITHUB_REF_NAME#v}"
+          go run ./cmd/release-tool checksums
       - name: Attest the final binaries, SBOMs, metadata, and complete source
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -112,9 +109,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft >/tmp/release.json 2>/dev/null; then
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' >/tmp/release-is-draft 2>/dev/null; then
             # Do not silently replace an already-published release on rerun.
-            python3 -c 'import json; assert json.load(open("/tmp/release.json"))["isDraft"], "Release is already published; create a new version"'
+            test "$(cat /tmp/release-is-draft)" = true || { echo 'Release already published; create a new version' >&2; exit 1; }
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --verify-tag --draft --title "$GITHUB_REF_NAME" --generate-notes
@@ -192,7 +189,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-15-intel]
+        runner: [macos-26]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

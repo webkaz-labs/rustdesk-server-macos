@@ -27,6 +27,8 @@ Usage:
 setup asks before installing/starting login services. --yes requires an explicit
 --address and approves the printed plan. stop also disables start at next login;
 start restores it. No sudo, router changes, or firewall changes are performed.
+Interactive setup offers LAN or an already-connected Tailscale address. All clients
+must be able to reach the selected address. Tailscale is never installed or changed.
 `
 
 func Run(args []string, in io.Reader, out io.Writer, version string) error {
@@ -88,11 +90,24 @@ func Run(args []string, in io.Reader, out io.Writer, version string) error {
 }
 
 func setupCLI(m *Manager, args []string, in io.Reader, out io.Writer, version string) error {
+	return setupCLIWithDiscovery(m, args, in, out, version, addressDiscovery{
+		lan: lanAddresses, tailscale: tailscaleAddresses,
+	})
+}
+
+type addressDiscovery struct {
+	lan       func() ([]candidate, error)
+	tailscale func() []candidate
+}
+
+var errSetupCancelled = errors.New("setup cancelled")
+
+func setupCLIWithDiscovery(m *Manager, args []string, in io.Reader, out io.Writer, version string, discovery addressDiscovery) error {
 	f := flag.NewFlagSet("setup", flag.ContinueOnError)
 	f.SetOutput(out)
 	var address, dataDir string
 	var yes bool
-	f.StringVar(&address, "address", "", "LAN address or hostname clients can reach")
+	f.StringVar(&address, "address", "", "IP or hostname ALL clients can reach (LAN or Tailscale)")
 	f.StringVar(&dataDir, "data-dir", "", "persistent absolute data path")
 	f.BoolVar(&yes, "yes", false, "approve the displayed plan (requires --address)")
 	if err := f.Parse(args); err != nil {
@@ -105,7 +120,7 @@ func setupCLI(m *Manager, args []string, in io.Reader, out io.Writer, version st
 		return errors.New("unexpected arguments to setup")
 	}
 	if yes && address == "" {
-		return errors.New("--yes requires --address; LAN detection must be reviewed")
+		return errors.New("--yes requires --address; address detection must be reviewed")
 	}
 	if err := m.available(); err != nil {
 		return err
@@ -117,6 +132,7 @@ func setupCLI(m *Manager, args []string, in io.Reader, out io.Writer, version st
 	if old != nil {
 		if address == "" {
 			address = old.Address
+			fmt.Fprintf(out, "Keeping configured client-facing address %s; use setup --address HOST to change it.\n", address)
 		}
 		if dataDir == "" {
 			dataDir = old.DataDir
@@ -124,18 +140,11 @@ func setupCLI(m *Manager, args []string, in io.Reader, out io.Writer, version st
 	}
 	reader := bufio.NewReader(in)
 	if address == "" {
-		candidates, err := lanAddresses()
-		if err != nil {
-			return err
+		address, err = chooseSetupAddress(reader, out, discovery)
+		if errors.Is(err, errSetupCancelled) {
+			fmt.Fprintln(out, "Cancelled; no changes made.")
+			return nil
 		}
-		fmt.Fprintln(out, "Detected private IPv4 addresses:")
-		for _, c := range candidates {
-			fmt.Fprintf(out, "  %s (%s)\n", c.Address, c.Interface)
-		}
-		if len(candidates) > 0 {
-			address = candidates[0].Address
-		}
-		address, err = prompt(reader, out, "Client-facing address", address)
 		if err != nil {
 			return err
 		}
@@ -165,6 +174,7 @@ func setupCLI(m *Manager, args []string, in io.Reader, out io.Writer, version st
 	c := &Config{Schema: 1, Address: address, DataDir: dataDir, PackageVersion: version}
 	fmt.Fprintf(out, "\nSetup plan\n  Client ID server: %s\n  Relay server: %s\n  Persistent data: %s (owner-only permissions)\n  Runtime/logs: %s\n  User LaunchAgents: %s\n", net.JoinHostPort(address, "21116"), net.JoinHostPort(address, "21117"), dataDir, m.Root, m.Agents)
 	fmt.Fprintln(out, "  Creates or preserves one Ed25519 key pair; copies the bundled hbbs/hbbr.\n  Starts hbbs/hbbr now and on this user's login; an existing setup is restarted.\n  Opens TCP 21115–21119 and UDP 21116 on ALL network interfaces.\n  This is not a LAN-only bind. Use a trusted LAN; no router/firewall settings change.\n  macOS may ask you to allow incoming connections/background items.\n  Upstream hbbs performs its own outbound version check to RustDesk.\n  Server key identifies the server; use strong RustDesk client access passwords.")
+	fmt.Fprintln(out, clientReachabilityNotice)
 	if !yes {
 		answer, err := prompt(reader, out, "Apply and start? [y/N]", "")
 		if err != nil {
@@ -188,6 +198,52 @@ func setupCLI(m *Manager, args []string, in io.Reader, out io.Writer, version st
 	}
 	fmt.Fprintln(out, "\nSetup complete. Existing data and server identity are kept on later setup runs.")
 	return showStatus(m, out)
+}
+
+const clientReachabilityNotice = "All clients must reach the chosen ID/relay address. Tailscale addresses require tailnet access\nand policy allowing the RustDesk ports; MagicDNS also requires working client DNS.\nWindows without Tailscale cannot directly reach a Tailscale 100.x address; use a reachable\nLAN address or a separately approved network route. Setup does not configure either route."
+
+func chooseSetupAddress(reader *bufio.Reader, out io.Writer, discovery addressDiscovery) (string, error) {
+	lan, err := discovery.lan()
+	if err != nil {
+		fmt.Fprintln(out, "LAN address detection unavailable; you can enter an address manually.")
+		lan = nil
+	} else {
+		fmt.Fprintln(out, "Detected private LAN IPv4 addresses:")
+		for _, c := range lan {
+			fmt.Fprintf(out, "  %s (%s)\n", c.Address, c.Interface)
+		}
+	}
+	lanDefault := ""
+	if len(lan) > 0 {
+		lanDefault = lan[0].Address
+	}
+	tailscale := discovery.tailscale()
+	if len(tailscale) == 0 {
+		return prompt(reader, out, "Client-facing address", lanDefault)
+	}
+	fmt.Fprintln(out, "Connected Tailscale addresses for this Mac:")
+	for _, c := range tailscale {
+		fmt.Fprintf(out, "  %s (%s)\n", c.Address, c.Interface)
+	}
+	fmt.Fprintln(out, clientReachabilityNotice)
+	for {
+		choice, err := prompt(reader, out, "Client network (lan/tailscale/manual/cancel)", "")
+		if err != nil {
+			return "", err
+		}
+		switch strings.ToLower(choice) {
+		case "lan":
+			return prompt(reader, out, "Client-facing LAN address", lanDefault)
+		case "tailscale":
+			return prompt(reader, out, "Client-facing Tailscale IP or MagicDNS hostname", tailscale[0].Address)
+		case "manual":
+			return prompt(reader, out, "Client-facing address", "")
+		case "cancel":
+			return "", errSetupCancelled
+		default:
+			fmt.Fprintln(out, "Choose lan, tailscale, manual, or cancel.")
+		}
+	}
 }
 
 func prompt(r *bufio.Reader, w io.Writer, label, def string) (string, error) {
@@ -312,6 +368,7 @@ func showStatus(m *Manager, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "\nRustDesk client settings → Network → ID/Relay server\n  ID server: %s\n  Relay server: %s\n  Key (PUBLIC): %s\n  API server: leave blank\n\nData: %s\nLogs: %s\nPackage: %s\n", net.JoinHostPort(c.Address, "21116"), net.JoinHostPort(c.Address, "21117"), key, c.DataDir, filepath.Join(m.Root, "logs"), c.PackageVersion)
 	fmt.Fprintln(out, "Status checks local launchd processes, not end-to-end remote connectivity.\nIf DHCP/VPN changes the reachable address, rerun setup --address NEW_ADDRESS.")
+	fmt.Fprintln(out, clientReachabilityNotice)
 	if !healthy {
 		return errors.New("one or more services are stopped; run start, or inspect the logs")
 	}

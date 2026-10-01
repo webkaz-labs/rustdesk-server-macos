@@ -4,14 +4,16 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-// Opt-in on a disposable macOS runner. Uses a unique user-domain service and a
+// Opt-in on a disposable macOS runner. Uses a unique login-user service and a
 // harmless sleep fixture, not the user's production labels or network daemons.
 func TestLaunchdIntegration(t *testing.T) {
 	if os.Getenv("RUSTDESK_MACOS_INTEGRATION") != "1" {
@@ -19,8 +21,28 @@ func TestLaunchdIntegration(t *testing.T) {
 	}
 	m, _, c, src := fixture(t)
 	real := newManager(m.Home, os.Getuid())
-	m.Command = real.Command
-	m.Domain = fmt.Sprintf("user/%d", os.Getuid())
+	m.Command = func(args ...string) (string, error) {
+		if len(args) == 3 && args[0] == "bootstrap" {
+			if output, err := exec.Command("/usr/bin/plutil", "-lint", args[2]).CombinedOutput(); err != nil {
+				return string(output), fmt.Errorf("invalid fixture plist: %w (%s)", err, output)
+			}
+		}
+		output, err := real.Command(args...)
+		if err != nil && len(args) == 3 && args[0] == "bootstrap" {
+			// Restrict diagnostic logs to this disposable fixture's unique label.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			diagnostic, _ := exec.CommandContext(ctx, "/usr/bin/log", "show", "--last", "1m", "--style", "compact", "--predicate", fmt.Sprintf("process == \"launchd\" AND eventMessage CONTAINS \"%s\"", m.Prefix)).CombinedOutput()
+			t.Logf("scoped launchd diagnostic: %s", diagnostic)
+		}
+		return output, err
+	}
+	// Exercise the exact GUI/login-session domain used by production rather
+	// than relying on different behavior in the user/UID domain.
+	m.Domain = fmt.Sprintf("gui/%d", os.Getuid())
+	if err := m.available(); err != nil {
+		t.Fatalf("macOS runner requires a GUI login session for this fixture: %v", err)
+	}
 	m.Prefix = fmt.Sprintf("com.webkaz-labs.rustdesk-server.ci.%d.%d", os.Getpid(), time.Now().UnixNano())
 	for _, name := range packageNames {
 		if err := os.WriteFile(filepath.Join(src, name), []byte("#!/bin/sh\nexec /bin/sleep 3600\n"), 0700); err != nil {

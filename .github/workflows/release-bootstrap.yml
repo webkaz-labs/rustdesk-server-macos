@@ -1,0 +1,42 @@
+name: Start release from tested main
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'New release tag, for example v0.1.0'
+        type: string
+        required: true
+      tested_commit:
+        description: 'Exact 40-character main commit whose Apple Silicon CI passed; must be this dispatch SHA'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-bootstrap-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Verify tested main, create exact tag, and explicitly dispatch release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          TESTED_COMMIT: ${{ inputs.tested_commit }}
+        run: go run ./cmd/release-tool bootstrap "$RELEASE_TAG" "$TESTED_COMMIT"

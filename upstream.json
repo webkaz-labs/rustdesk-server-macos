@@ -7,6 +7,6 @@
     "libs/hbb_common": "83419b6549636ee39dacef7776c473f5802e08d6"
   },
   "rust_toolchain": "1.98.1",
-  "go_toolchain": "1.26.8",
+  "go_toolchain": "1.27.1",
   "minimum_macos": "15.0"
 }

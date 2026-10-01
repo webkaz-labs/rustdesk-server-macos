@@ -1,13 +1,17 @@
 # RustDesk Server for macOS
 
+[日本語](README.md) | [English](README.en.md)
+
 RustDesk OSS Server の `hbbs` / `hbbr` を macOS 向けにビルドし、mise で配布します。追加の小さな Go 製 CLI が、鍵・保存先・ログイン時の自動起動を管理します。RustDesk の公式配布ではありません。
 
-- macOS 15 以降 / Apple Silicon・Intel、それぞれネイティブビルド
+- Apple Silicon 専用のネイティブビルド。指定する最低対応 OS は macOS 15 です。CI のビルド・テスト環境は macOS 26 で、macOS 15 を含むそれ以前の OS での実行互換性は未検証です
 - 同梱 upstream: **RustDesk Server 1.1.16**（[固定コミット](https://github.com/rustdesk/rustdesk-server/commit/73523b31cfd25d77dee862e6fc9f5e1fb5e485ef)）
 - 利用時の clone、Rust/Go、Homebrew、mise.toml の手編集は不要
 - パッケージ署名は GitHub Actions OIDC / Sigstore。Apple Developer ID 署名・公証とは別です
 
 ## インストールして起動
+
+**リリース状況:** `v0.1.0` は公開予定のバージョンで、まだ公開されていません。以下は公開後のインストール手順です。ネイティブ macOS CI 全体と公開リリースの mise インストールの検証は、まだ完了していません。
 
 [mise](https://mise.jdx.dev/getting-started.html) を導入・有効化済みの Mac で実行します。Packslip 対応の新しい mise が必要です（CI の固定版は 2026.9.18）。
 
@@ -16,7 +20,7 @@ mise use -g packslip:github.com/webkaz-labs/rustdesk-server-macos@0.1.0
 rustdesk-server setup
 ```
 
-`setup` はこのリポジトリ独自のコマンドです。検出した LAN アドレスと保存先を確認し、最後に `y` で承認するとサービスを登録・起動します。複数の NIC / VPN がある場合は、クライアントから到達できるアドレスを選んでください。
+`setup` はこのリポジトリ独自のコマンドです。クライアントに案内するアドレスと保存先を確認し、最後に `y` で承認するとサービスを登録・起動します。複数の NIC / VPN がある場合は、クライアントから到達できるアドレスを選んでください。
 
 完了時に表示される **ID server / Relay server / Key (PUBLIC)** を RustDesk クライアントの「設定 → ネットワーク → ID/リレーサーバー」に設定します。API server は空欄です。秘密鍵をクライアントへコピーする必要はありません。
 
@@ -27,6 +31,22 @@ rustdesk-server start   # 起動し、ログイン時の自動起動を復元
 ```
 
 ログインユーザーの LaunchAgent です。`sudo` は使いません。ログアウト中・ログイン前には動かず、Mac がスリープすると利用できません。
+
+### Tailscale を使う場合
+
+Tailscale は事前にインストール・接続済みで、tailnet のポリシーが接続を許可している必要があります。初回の対話式 `setup` で既存設定も `--address` 指定もない場合だけ、既存の [Tailscale CLI](https://tailscale.com/docs/reference/tailscale-cli?tab=macos) に `status --json --peers=false` で状態を読み取ります。公式 macOS アプリ内の実行ファイルも `TAILSCALE_BE_CLI=1` で利用できます。接続済みの有効な状態を取得できると、LAN / Tailscale / 手入力 / キャンセルから選べます。Tailscale では、この Mac 自身の状態で確認できた `100.x` IP または MagicDNS 名を選びます。
+
+未導入・停止中・不正な状態応答の場合は通常の LAN / 手入力の案内に戻ります。既存設定のアドレスや明示した `--address` は優先され、Tailscale の状態確認は行いません。切り替える場合は、以下のどちらか一方の例を自分の Mac の実際のアドレスに置き換えて実行します。鍵とデータは引き継ぎます。
+
+```sh
+# 例: 自分の Mac の Tailscale IP または MagicDNS 名に置き換える
+rustdesk-server setup --address 100.100.100.100
+# または:
+rustdesk-server setup --address my-mac.example-tailnet.ts.net
+```
+
+- **全クライアントが、選んだ ID / Relay server のアドレスに到達できる必要があります。** MagicDNS 名にはクライアント側の tailnet DNS 利用も必要です。Tailscale を利用しない Windows クライアントには、到達可能な LAN アドレス、または許可・設定済みの経路が必要です。別のネットワークへの接続経路が自動で追加されることはありません
+- 自動インストール・ログイン・ACL・ルーティング・ファイアウォール変更は行いません。Tailscale のアドレスを選んでも daemon の待受けが Tailscale のみに制限されるわけではありません。実際の Tailscale 経由のエンドツーエンド接続は未検証です
 
 ### 更新
 
@@ -82,14 +102,15 @@ LaunchAgent は `~/Library/LaunchAgents/com.webkaz-labs.rustdesk-server.{hbbs,hb
 
 [リリース手順](docs/RELEASING.md) に固定ツールチェーン、ビルド、署名、対応ソースの手順を記載しています。
 
+CLI とパッケージングツールは **Go 1.27.1** でビルドし、Go の標準ライブラリのみを使用します。処理の連携にはシェルスクリプト、upstream のビルドには Rust を使い、このプロジェクト独自の Python ツールはありません。ネイティブ CI は GitHub Actions の **`macos-26`（Apple Silicon / arm64）** を使用します。macOS 15 の最低対応指定は、この CI による macOS 15 での動作確認を意味しません。
+
 ```sh
 go test -race ./...
 go vet ./...
-python3 -m unittest discover -s scripts -p 'test_*.py' -v
 # ネイティブ macOS CI / 使い捨てテスト環境だけ:
 RUSTDESK_MACOS_INTEGRATION=1 go test ./internal/service -run TestLaunchdIntegration -count=1 -v
 ```
 
-通常の Go テストは launchctl をモックします。macOS 統合テストは一意の user-domain label と一時ディレクトリ、ネットワーク待受けのない sleep fixture を使い、終了時に解除します。実際の daemon のクライアント間接続テストは含みません。
+通常の Go テストは CLI と Go 製パッケージングツールを対象にし、サービスのテストでは launchctl をモックします。macOS 統合テストは一意のログインユーザー用 label と一時ディレクトリ、ネットワーク待受けのない sleep fixture を使い、終了時に解除します。実際の daemon のクライアント間接続テストは含みません。
 
 upstream は AGPL-3.0、本 CLI は **AGPL-3.0-or-later**（[LICENSE](LICENSE)）。各リリースには upstream の固定コミット・再帰 submodule・ロック済み依存の vendored source・CLI ソース・ビルドスクリプトを含む対応ソースと依存ライセンス一覧を添付します。GitHub Actions の公開ログで、対象コミットに対するネイティブビルド・検証結果を確認できます。

@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
-STAGE="${1:?usage: check-native.sh STAGE arm64|amd64}"
-case "${2:?architecture required}" in arm64) ARCH=arm64 ;; amd64) ARCH=x86_64 ;; *) exit 2 ;; esac
+STAGE="${1:?usage: check-native.sh STAGE arm64 [MINIMUM_MACOS]}"
+case "${2:?architecture required}" in arm64) ARCH=arm64 ;; *) exit 2 ;; esac
+MINIMUM_MACOS="${3:-15.0}"
 test "$(uname -s)" = Darwin
 for name in rustdesk-server hbbs hbbr; do
   binary="$STAGE/bin/$name"
@@ -19,7 +20,19 @@ for name in rustdesk-server hbbs hbbr; do
   # Record the actual deployment target, and reject binaries newer than our
   # declared minimum. This does not claim testing on an older operating system.
   otool -l "$binary" | awk '/LC_BUILD_VERSION/{f=1;next} f && /minos/{print $2;f=0} /LC_VERSION_MIN_MACOSX/{g=1;next} g && /version/{print $2;g=0}' |
-    python3 -c 'import sys; values=sys.stdin.read().split(); assert values,"Mach-O deployment target missing"; assert all(tuple(map(int,v.split("."))) <= (15,0,0) for v in values), values'
+    awk -v maximum="$MINIMUM_MACOS" '
+      function supported(version, parts, limit, n, m, i) {
+        if (version !~ /^[0-9]+([.][0-9]+)*$/ || maximum !~ /^[0-9]+([.][0-9]+)*$/) return 0
+        n=split(version, parts, "[.]"); m=split(maximum, limit, "[.]")
+        for (i=1; i<=n || i<=m; i++) {
+          if ((parts[i]+0) < (limit[i]+0)) return 1
+          if ((parts[i]+0) > (limit[i]+0)) return 0
+        }
+        return 1
+      }
+      { count++; if (!supported($0)) { print "Unsupported Mach-O minimum: " $0 > "/dev/stderr"; failed=1 } }
+      END { if (!count) print "Mach-O deployment target missing" > "/dev/stderr"; if (!count || failed) exit 1 }
+    '
   # Ad-hoc signing satisfies native arm64 executable integrity requirements;
   # it is deliberately not Apple Developer ID signing or notarization.
   codesign --force --sign - "$binary"
