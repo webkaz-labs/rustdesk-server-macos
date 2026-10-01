@@ -13,6 +13,8 @@ This project builds the RustDesk OSS Server binaries, `hbbs` and `hbbr`, for mac
 
 **Release status:** [v0.1.1](https://github.com/webkaz-labs/rustdesk-server-macos/releases/tag/v0.1.1) is published. The [release CI run](https://github.com/webkaz-labs/rustdesk-server-macos/actions/runs/36800785882) passed native builds on macOS 26 / Apple Silicon, unit and launchd tests, signature verification, and installation of the published package through mise / Packslip. End-to-end connections between real clients, including connections over Tailscale, remain unverified.
 
+**Unreleased source change:** Japanese/English CLI localization described below is not included in v0.1.1. The installation commands still select the published v0.1.1 release; localization requires a build from this source until a new release is published.
+
 Run these commands on a Mac with [mise](https://mise.jdx.dev/getting-started.html) already installed and activated. A recent version of mise with Packslip support is required (the version pinned for CI is 2026.9.18).
 
 ```sh
@@ -31,6 +33,26 @@ rustdesk-server start   # Start services and restore automatic startup at login
 ```
 
 The services run as LaunchAgents for the logged-in user. Do not use `sudo`. They do not run while you are logged out or before login, and they are unavailable while the Mac is asleep.
+
+### Display language
+
+**Availability:** This section describes unreleased source, not v0.1.1.
+
+The companion `rustdesk-server` CLI supports Japanese and English throughout help, setup questions and confirmations, service status, errors, and next-step guidance. The default is `--lang auto`. Choose a language for one invocation, before or after the command:
+
+```sh
+rustdesk-server --lang ja help
+rustdesk-server setup --lang en
+rustdesk-server --lang auto status
+```
+
+An override applies to one invocation. Repeat `--lang ja` or `--lang en` on suggested follow-up commands when you want to keep that display language.
+
+Automatic selection uses the **first nonempty** environment variable in this order: `LC_ALL` → `LC_MESSAGES` → `LANG`. A Japanese locale such as `ja_JP.UTF-8` selects Japanese; English, unknown locales, `C`, and `POSIX` select English. A higher-priority value is authoritative: `LC_ALL=C` with `LANG=ja_JP.UTF-8` still selects English.
+
+Only when all three variables are empty or unset on macOS, the CLI reads the first preferred language in `AppleLanguages` through `/usr/bin/defaults`. Japanese selects Japanese; another language, an unavailable setting, or a failed lookup safely selects English. It does not change macOS language settings. `--lang ja` and `--lang en` override all automatic selection.
+
+Command and flag names, confirmation tokens such as `y`, addresses, paths, public keys, and saved configuration retain the same values in either language. Logs and diagnostics produced by upstream `hbbs` / `hbbr` or the operating system retain their original text; the helper does not translate them.
 
 ### Using Tailscale
 
@@ -87,7 +109,7 @@ Changing the data location of an existing setup is rejected to prevent accidenta
 ## Troubleshooting
 
 - **Command not found:** Check that mise is activated in your current shell. You can also run `mise exec packslip:github.com/webkaz-labs/rustdesk-server-macos@0.1.1 -- rustdesk-server setup`
-- **Unable to download a newly published release:** mise's default minimum release age is **24 hours**. Installation may be held back during the first 24 hours after publication; retry after that period. Rate limits may also apply. Check [Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases) and the [mise Packslip documentation](https://mise.jdx.dev/dev-tools/backends/packslip.html). Do not globally disable release-age protection or disable signature verification
+- **Unable to download a newly published release:** Check the exact version, release assets, and any reported rate limit in [Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases). In mise **2026.9.18**, the default `minimum_release_age` is 24 hours for version discovery/fuzzy selection, but **explicit full version pins such as `@0.1.1` are exempt**. The pinned install command above does not require waiting 24 hours or disabling that setting. Keep signature, signer identity, digest, and platform verification enabled. See the [pinned mise setting semantics](https://github.com/jdx/mise/blob/v2026.9.18/settings.toml#L1855-L1908) and [Packslip exact-pin handling](https://github.com/jdx/mise/blob/v2026.9.18/src/backend/packslip.rs#L726-L735)
 - **macOS blocks execution:** This distribution uses ad-hoc signing only and is not notarized. Verify its signatures and source, then use macOS's normal approval flow. You do not need to disable Gatekeeper globally
 - **A GUI login is required:** Run the command without `sudo` in Terminal as the user who is logged in to the Mac
 - **Port already in use:** Check for conflicts with an existing RustDesk Server, Docker, or another service. Stop the unneeded instance before trying again
@@ -100,7 +122,7 @@ For automation only, after approving the changes that setup displays, you can us
 
 ## Build, verification, and licensing
 
-The [release guide](docs/RELEASING.md) documents the pinned toolchains, build process, signing, and corresponding-source procedures.
+The [development and usability principles](docs/DEVELOPMENT_PRINCIPLES.en.md) guide implementation, review, and documentation, including first-class Japanese/English support and clear next actions. The [release guide](docs/RELEASING.md) documents the pinned toolchains, build process, signing, and corresponding-source procedures.
 
 The CLI and packaging tools are built with **Go 1.27.1** and use only the Go standard library. Shell scripts coordinate the steps, and Rust builds upstream; there are no project-authored Python tools. Native CI uses the GitHub Actions **`macos-26` (Apple Silicon / arm64)** runner. The declared macOS 15 minimum does not mean this CI verifies execution on macOS 15.
 

@@ -4,6 +4,13 @@ The release workflow builds the official RustDesk Server source and this helper.
 No upstream prebuilt server binary is downloaded. Distribution versions are
 independent of the upstream RustDesk Server version.
 
+Read the [development and usability principles](DEVELOPMENT_PRINCIPLES.en.md)
+([日本語](DEVELOPMENT_PRINCIPLES.ja.md)) before changing the CLI or its documentation.
+Keep source changes, native CI evidence, published-package verification, and
+real-client acceptance distinct. The Japanese/English CLI changes in this source
+are unreleased; the published baseline remains v0.1.1 until an authorized new
+release completes verification.
+
 ## Pins and native runners
 
 `upstream.json` pins RustDesk Server `1.1.16` to commit
@@ -172,10 +179,37 @@ release already exists; investigate, then publish a corrected new version or
 explicitly withdraw the bad release. Do not claim the release passed until this
 last job succeeds.
 
-The `verify-published-install` job disables mise's normal 24-hour release-age delay
-only for that freshly published version. It does not disable signatures, signer
-identity, hashes, or platform requirements. Normal users retain mise's default
-age protection.
+mise 2026.9.18 applies its default 24-hour `minimum_release_age` to version
+discovery/fuzzy selection; **explicit full version pins and lockfile selections
+are exempt**. The published-install check selects the exact release version, so
+it does not require a release-age override. Keep signature, signer identity,
+digest, and platform checks enabled; do not disable verification to make a fresh
+release install. See the [pinned setting semantics](https://github.com/jdx/mise/blob/v2026.9.18/settings.toml#L1855-L1908)
+and [Packslip exact-pin handling](https://github.com/jdx/mise/blob/v2026.9.18/src/backend/packslip.rs#L726-L735).
+
+### Localization acceptance before publication
+
+Treat Japanese and English as supported human interfaces. Before publishing a
+release that includes localization, check both languages across help, setup
+questions and confirmation, cancellation, status, start/stop, errors, and recovery
+guidance. Exercise `--lang ja|en|auto` before and after the command. Automatic
+selection must respect the first nonempty value in `LC_ALL`, `LC_MESSAGES`, then
+`LANG`; only when all three are empty/unset on macOS may it use the first
+`AppleLanguages` preference through `/usr/bin/defaults`. Unknown values,
+`C`/`POSIX`, unsupported preferred languages, and lookup failures must use English.
+
+Unit tests should cover injected locale/preference inputs and failed lookups;
+that is distinct from verifying preference lookup on a native Mac. Check that
+addresses, paths, public keys, command tokens, and persisted configuration do not
+change with language. Upstream daemon logs and OS diagnostics remain in their
+original language. Use explicit `--lang` for deterministic smoke assertions.
+
+Run the regular tests below and the isolated native launchd fixture. Verify both
+localized help outputs from the actual published mise-installed helper before
+claiming distribution verification. The fixture does not establish real RustDesk
+client connectivity, and help smoke tests do not establish interactive setup or
+macOS 15 runtime compatibility. Update both READMEs' release status and language
+availability only after the new release and its verification finish.
 
 ## Local verification
 

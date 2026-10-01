@@ -296,15 +296,19 @@ jobs:
           cache: false
       - name: Install through Packslip from the public release and inspect all binaries
         env:
-          # Only this fresh-release smoke bypasses the ordinary 24h age delay;
-          # all signature, identity, digest and platform checks stay enabled.
-          MISE_MINIMUM_RELEASE_AGE: 0s
+          # An exact full-version pin is installable immediately; keep normal
+          # signature, signer, digest and platform checks enabled.
           MISE_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tool="packslip:github.com/${GITHUB_REPOSITORY}@${GITHUB_REF_NAME#v}"
           mise install "$tool"
           mise exec "$tool" -- rustdesk-server --version
+          en_help="$(mise exec "$tool" -- rustdesk-server --lang en --help)"
+          ja_help="$(mise exec "$tool" -- rustdesk-server --lang ja --help)"
+          test "$en_help" != "$ja_help"
+          test "$(LC_ALL=ja_JP.UTF-8 mise exec "$tool" -- rustdesk-server --help)" = "$ja_help"
+          mise exec "$tool" -- rustdesk-server setup --lang ja --help
           mise exec "$tool" -- hbbs --help
           mise exec "$tool" -- hbbr --help
           install_dir="$(mise where "$tool")"

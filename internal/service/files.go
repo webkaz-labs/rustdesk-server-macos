@@ -9,8 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -22,7 +20,7 @@ import (
 // strings are handled as data, including paths containing spaces or XML tokens.
 func cleanPath(p string) (string, error) {
 	if !filepath.IsAbs(p) || strings.ContainsAny(p, "\x00\r\n") {
-		return "", errors.New("use an absolute path without control characters")
+		return "", problem("use an absolute path without control characters")
 	}
 	return filepath.Clean(p), nil
 }
@@ -33,7 +31,7 @@ func regular(path string) (os.FileInfo, error) {
 		return nil, err
 	}
 	if !st.Mode().IsRegular() {
-		return nil, fmt.Errorf("refusing non-regular file: %s", path)
+		return nil, problem("refusing non-regular file: %s", path)
 	}
 	return st, nil
 }
@@ -47,17 +45,17 @@ func privateDir(path string) error {
 		return err
 	}
 	if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing non-directory or symlink: %s", path)
+		return problem("refusing non-directory or symlink: %s", path)
 	}
 	if sys, ok := st.Sys().(*syscall.Stat_t); ok && int(sys.Uid) != os.Getuid() {
-		return fmt.Errorf("directory is not owned by this user: %s", path)
+		return problem("directory is not owned by this user: %s", path)
 	}
 	return os.Chmod(path, 0700)
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	if st, err := os.Lstat(path); err == nil && !st.Mode().IsRegular() {
-		return fmt.Errorf("refusing non-regular destination: %s", path)
+		return problem("refusing non-regular destination: %s", path)
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -99,7 +97,7 @@ func ensureKeys(dir string) (string, error) {
 	var secret ed25519.PrivateKey
 	if os.IsNotExist(err) {
 		if _, e := os.Lstat(pubPath); e == nil {
-			return "", errors.New("public key exists without private key; restore the private key from backup, do not rotate silently")
+			return "", problem("public key exists without private key; restore the private key from backup, do not rotate silently")
 		} else if !os.IsNotExist(e) {
 			return "", e
 		}
@@ -107,7 +105,7 @@ func ensureKeys(dir string) (string, error) {
 		for attempt := 0; attempt < 300; attempt++ {
 			_, secret, err = ed25519.GenerateKey(rand.Reader)
 			if err != nil {
-				return "", errors.New("could not generate server key")
+				return "", problem("could not generate server key")
 			}
 			if !strings.ContainsAny(base64.StdEncoding.EncodeToString(secret[ed25519.SeedSize:]), "/:") {
 				break
@@ -127,25 +125,25 @@ func ensureKeys(dir string) (string, error) {
 			e = ce
 		}
 		if e != nil {
-			return "", errors.New("could not persist private key; inspect data directory before retrying")
+			return "", problem("could not persist private key; inspect data directory before retrying")
 		}
 	} else if err != nil {
 		return "", err
 	} else {
 		decoded, e := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
 		if e != nil || len(decoded) != ed25519.PrivateKeySize {
-			return "", errors.New("invalid private key; restore a valid backup (existing key was not replaced)")
+			return "", problem("invalid private key; restore a valid backup (existing key was not replaced)")
 		}
 		secret = ed25519.PrivateKey(decoded)
 		derived := ed25519.NewKeyFromSeed(secret[:ed25519.SeedSize])
 		if !bytes.Equal(derived, secret) {
-			return "", errors.New("private key failed Ed25519 consistency check (not replaced)")
+			return "", problem("private key failed Ed25519 consistency check (not replaced)")
 		}
 	}
 	public := base64.StdEncoding.EncodeToString(secret[ed25519.SeedSize:])
 	if p, e := readRegular(pubPath); e == nil {
 		if strings.TrimSpace(string(p)) != public {
-			return "", errors.New("public/private key mismatch; restore the matching pair (not replaced)")
+			return "", problem("public/private key mismatch; restore the matching pair (not replaced)")
 		}
 	} else if os.IsNotExist(e) {
 		if e = atomicWrite(pubPath, []byte(public), 0600); e != nil {
@@ -171,7 +169,7 @@ func publicKey(dir string) (string, error) {
 	s := strings.TrimSpace(string(b))
 	decoded, err := base64.StdEncoding.DecodeString(s)
 	if err != nil || len(decoded) != ed25519.PublicKeySize {
-		return "", errors.New("invalid public key file")
+		return "", problem("invalid public key file")
 	}
 	return s, nil
 }
@@ -185,18 +183,18 @@ func readConfig(path string) (*Config, error) {
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if err = d.Decode(&c); err != nil {
-		return nil, errors.New("invalid config.json")
+		return nil, problem("invalid config.json")
 	}
 	if d.Decode(new(any)) != io.EOF {
-		return nil, errors.New("invalid trailing data in config.json")
+		return nil, problem("invalid trailing data in config.json")
 	}
 	if c.Schema != 1 {
-		return nil, errors.New("unsupported config schema")
+		return nil, problem("unsupported config schema")
 	}
 	if cleaned, err := cleanPath(c.DataDir); err != nil {
 		return nil, err
 	} else if cleaned != c.DataDir {
-		return nil, errors.New("data_dir must be a canonical absolute path")
+		return nil, problem("data_dir must be a canonical absolute path")
 	}
 	if err := validateAddress(c.Address); err != nil {
 		return nil, err
@@ -210,10 +208,10 @@ func stageBinaries(sourceDir, root string) (string, error) {
 		src := filepath.Join(sourceDir, name)
 		st, err := regular(src)
 		if err != nil {
-			return "", fmt.Errorf("find bundled %s next to rustdesk-server: %w", name, err)
+			return "", problem("find bundled %s next to rustdesk-server: %w", name, err)
 		}
 		if st.Mode()&0111 == 0 {
-			return "", fmt.Errorf("not executable: %s", src)
+			return "", problem("not executable: %s", src)
 		}
 		f, err := os.Open(src)
 		if err != nil {
@@ -233,7 +231,7 @@ func stageBinaries(sourceDir, root string) (string, error) {
 	dest := filepath.Join(releases, id)
 	if st, err := os.Lstat(dest); err == nil {
 		if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
-			return "", errors.New("cached runtime is not a real directory")
+			return "", problem("cached runtime is not a real directory")
 		}
 		// Verify cached copies; never trust a directory merely because its name matches.
 		existing := sha256.New()
@@ -243,7 +241,7 @@ func stageBinaries(sourceDir, root string) (string, error) {
 				return "", e
 			}
 			if st.Mode()&0111 == 0 {
-				return "", errors.New("cached runtime is not executable")
+				return "", problem("cached runtime is not executable")
 			}
 			b, e := readRegular(filepath.Join(dest, name))
 			if e != nil {
@@ -252,7 +250,7 @@ func stageBinaries(sourceDir, root string) (string, error) {
 			existing.Write(b)
 		}
 		if hex.EncodeToString(existing.Sum(nil)) != id {
-			return "", errors.New("cached runtime checksum mismatch")
+			return "", problem("cached runtime checksum mismatch")
 		}
 		return dest, nil
 	} else if !os.IsNotExist(err) {
@@ -282,7 +280,7 @@ func stageBinaries(sourceDir, root string) (string, error) {
 		copied.Write(b)
 	}
 	if hex.EncodeToString(copied.Sum(nil)) != id {
-		return "", errors.New("package changed during setup; retry after installation completes")
+		return "", problem("package changed during setup; retry after installation completes")
 	}
 	if err = os.Rename(stage, dest); err != nil {
 		return "", err
@@ -293,7 +291,7 @@ func stageBinaries(sourceDir, root string) (string, error) {
 func switchRuntime(root, target string) error {
 	current := filepath.Join(root, "current")
 	if st, err := os.Lstat(current); err == nil && st.Mode()&os.ModeSymlink == 0 {
-		return errors.New("current runtime path is not a symlink")
+		return problem("current runtime path is not a symlink")
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -315,7 +313,7 @@ func lock(root string) (func(), error) {
 	}
 	p := filepath.Join(root, ".setup.lock")
 	if st, err := os.Lstat(p); err == nil && !st.Mode().IsRegular() {
-		return nil, errors.New("unsafe setup lock")
+		return nil, problem("unsafe setup lock")
 	}
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
@@ -323,7 +321,7 @@ func lock(root string) (func(), error) {
 	}
 	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return nil, errors.New("another rustdesk-server operation is running")
+		return nil, problem("another rustdesk-server operation is running")
 	}
 	return func() { syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
 }

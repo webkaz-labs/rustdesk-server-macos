@@ -29,7 +29,7 @@ export CGO_ENABLED=0 GOOS=darwin GOARCH="$ARCH" GOTOOLCHAIN=local
 test "$(rustc +"$RUST" --version | awk '{print $2}')" = "$RUST"
 test "$(go env GOVERSION)" = "go$GO"
 # Fail fast on real launchd lifecycle problems before the longer Rust build.
-RUSTDESK_MACOS_INTEGRATION=1 go test ./internal/service -run TestLaunchdIntegration -count=1 -v
+RUSTDESK_MACOS_INTEGRATION=1 go test ./internal/service -run 'Test(LaunchdIntegration|NativeLocaleFallback)$' -count=1 -v
 if [ ! -d "$UPSTREAM/.git" ]; then
   git init "$UPSTREAM"
   git -C "$UPSTREAM" remote add origin "$(read_pin repository)"

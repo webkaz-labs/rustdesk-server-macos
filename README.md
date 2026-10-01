@@ -13,6 +13,8 @@ RustDesk OSS Server の `hbbs` / `hbbr` を macOS 向けにビルドし、mise �
 
 **リリース状況:** [v0.1.1](https://github.com/webkaz-labs/rustdesk-server-macos/releases/tag/v0.1.1) を公開済みです。[リリース CI](https://github.com/webkaz-labs/rustdesk-server-macos/actions/runs/36800785882) で macOS 26 / Apple Silicon のネイティブビルド、単体・launchd テスト、署名検証、公開パッケージの mise / Packslip インストールが成功しました。実クライアント間の接続や Tailscale 経由のエンドツーエンド接続は未検証です。
 
+**未リリースのソース変更:** 以下の日英 CLI 対応は v0.1.1 に含まれていません。インストール例は引き続き公開済みの v0.1.1 を指定しています。日英対応は、新版の公開まではこのソースからのビルドが必要です。
+
 [mise](https://mise.jdx.dev/getting-started.html) を導入・有効化済みの Mac で実行します。Packslip 対応の新しい mise が必要です（CI の固定版は 2026.9.18）。
 
 ```sh
@@ -31,6 +33,26 @@ rustdesk-server start   # 起動し、ログイン時の自動起動を復元
 ```
 
 ログインユーザーの LaunchAgent です。`sudo` は使いません。ログアウト中・ログイン前には動かず、Mac がスリープすると利用できません。
+
+### 表示言語
+
+**対応状況:** この節は未リリースのソースの説明です。v0.1.1 には含まれていません。
+
+補助 CLI `rustdesk-server` は、ヘルプだけでなく、セットアップの質問・確認、サービスの状態、エラー、次の操作案内まで日本語と英語に対応します。既定は `--lang auto` です。その実行だけ言語を指定するには、コマンドの前後どちらにも `--lang` を置けます。
+
+```sh
+rustdesk-server --lang ja help
+rustdesk-server setup --lang en
+rustdesk-server --lang auto status
+```
+
+指定は 1 回の実行だけに適用されます。案内された次のコマンドでも同じ表示言語を使う場合は、`--lang ja` または `--lang en` を再度付けてください。
+
+自動判定では `LC_ALL` → `LC_MESSAGES` → `LANG` の順で、**最初の空でない環境変数**を使います。`ja_JP.UTF-8` などの日本語ロケールは日本語、それ以外の言語・未知のロケール・`C`・`POSIX` は英語です。上位の値が優先されるため、`LC_ALL=C` と `LANG=ja_JP.UTF-8` の組み合わせでも英語になります。
+
+macOS で三つとも空または未設定の場合だけ、`/usr/bin/defaults` で `AppleLanguages` の先頭の優先言語を読み取ります。日本語なら日本語、他の言語・設定なし・取得失敗なら安全に英語へ戻ります。macOS の言語設定は変更しません。`--lang ja` / `--lang en` の明示指定は自動判定より優先されます。
+
+コマンド名・オプション名、`y` などの確認入力、アドレス、パス、公開鍵、保存済み設定の値は言語で変わりません。upstream の `hbbs` / `hbbr` や OS が出力するログ・診断情報は元の表記のままで、補助 CLI による翻訳は行いません。
 
 ### Tailscale を使う場合
 
@@ -87,7 +109,7 @@ LaunchAgent は `~/Library/LaunchAgents/com.webkaz-labs.rustdesk-server.{hbbs,hb
 ## トラブルシューティング
 
 - **コマンドがない**: mise が現在のシェルで有効か確認します。`mise exec packslip:github.com/webkaz-labs/rustdesk-server-macos@0.1.1 -- rustdesk-server setup` でも実行できます
-- **リリース直後に取得できない**: mise の既定の最小リリース経過時間は **24 時間**です。公開後の最初の 24 時間は取得が保留される場合があるため、経過後に再実行してください。レート制限が適用される場合もあります。[Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases) と [mise Packslip の説明](https://mise.jdx.dev/dev-tools/backends/packslip.html) を確認し、経過時間の保護設定をグローバルに無効化したり、署名検証を無効化したりしないでください
+- **リリース直後に取得できない**: 指定した版、配布ファイル、表示されたレート制限を [Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases) で確認します。mise **2026.9.18** の既定の `minimum_release_age` は版の探索・あいまい指定に対して 24 時間ですが、**`@0.1.1` のような完全な版の明示指定は対象外**です。上の固定版インストール例で 24 時間待ったり、この設定を無効化したりする必要はありません。署名・署名者・ダイジェスト・対象環境の検証は有効なままにしてください。[固定版 mise の設定仕様](https://github.com/jdx/mise/blob/v2026.9.18/settings.toml#L1855-L1908) と [Packslip の完全版指定の処理](https://github.com/jdx/mise/blob/v2026.9.18/src/backend/packslip.rs#L726-L735) を参照してください
 - **macOS が実行をブロックする**: この配布は ad-hoc 署名のみで、公証されていません。署名・取得元を確認して macOS の通常の許可フローを使ってください。Gatekeeper の全体無効化は不要です
 - **GUI ログインが必要と表示される**: Mac にログインした本人の Terminal で、`sudo` を付けずに実行します
 - **ポートが使用中**: 既存の RustDesk Server / Docker 等と競合していないか調べ、不要な方を止めてから再実行します
@@ -100,7 +122,7 @@ LaunchAgent は `~/Library/LaunchAgents/com.webkaz-labs.rustdesk-server.{hbbs,hb
 
 ## ビルド・検証・ライセンス
 
-[リリース手順](docs/RELEASING.md) に固定ツールチェーン、ビルド、署名、対応ソースの手順を記載しています。
+[開発・使いやすさの基本方針](docs/DEVELOPMENT_PRINCIPLES.ja.md) を実装・レビュー・文書更新の共通基準にし、日本語と英語の正式対応、分かりやすい次の操作を扱います。[リリース手順](docs/RELEASING.md) に固定ツールチェーン、ビルド、署名、対応ソースの手順を記載しています。
 
 CLI とパッケージングツールは **Go 1.27.1** でビルドし、Go の標準ライブラリのみを使用します。処理の連携にはシェルスクリプト、upstream のビルドには Rust を使い、このプロジェクト独自の Python ツールはありません。ネイティブ CI は GitHub Actions の **`macos-26`（Apple Silicon / arm64）** を使用します。macOS 15 の最低対応指定は、この CI による macOS 15 での動作確認を意味しません。
 

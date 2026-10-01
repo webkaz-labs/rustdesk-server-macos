@@ -40,3 +40,17 @@ for name in rustdesk-server hbbs hbbr; do
   "$binary" --help > /dev/null
 done
 "$STAGE/bin/rustdesk-server" --version
+
+# Localized help is read-only and must work in the actual native executable.
+helper="$STAGE/bin/rustdesk-server"
+en_help="$("$helper" --lang en --help)"
+ja_help="$("$helper" --lang ja --help)"
+test "$en_help" != "$ja_help"
+test "$(LC_ALL=ja_JP.UTF-8 "$helper" --help)" = "$ja_help"
+test "$(LC_ALL=fr_FR.UTF-8 "$helper" --help)" = "$en_help"
+test "$(LC_ALL=ja_JP.UTF-8 "$helper" --lang en --help)" = "$en_help"
+"$helper" setup --lang ja --help >/dev/null
+"$helper" setup --lang en --help >/dev/null
+# Exercise the native OS preference path without modifying the preference.
+os_help="$(env -u LC_ALL -u LC_MESSAGES -u LANG "$helper" --help)"
+test "$os_help" = "$en_help" || test "$os_help" = "$ja_help"

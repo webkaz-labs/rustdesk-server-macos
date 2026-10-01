@@ -29,10 +29,12 @@ type Config struct {
 	PackageVersion string `json:"package_version"`
 }
 
-var errServiceAbsent = errors.New("launchd service is not loaded")
+var errServiceAbsent = problem("launchd service is not loaded")
 
 type Commander func(args ...string) (string, error)
 type Manager struct {
+	executable                         func() (string, error)
+	Language                           language
 	Home, Root, Agents, Domain, Prefix string
 	Command                            Commander
 	Wait                               func(*Manager) error
@@ -41,6 +43,7 @@ type Manager struct {
 
 func newManager(home string, uid int) *Manager {
 	m := &Manager{Home: home, Root: filepath.Join(home, "Library", "Application Support", "rustdesk-server"), Agents: filepath.Join(home, "Library", "LaunchAgents"), Domain: "gui/" + strconv.Itoa(uid), Prefix: "com.webkaz-labs.rustdesk-server"}
+	m.executable = os.Executable
 	m.Command = func(args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -50,7 +53,7 @@ func newManager(home string, uid int) *Manager {
 			if len(args) == 2 && args[0] == "print" && strings.Count(args[1], "/") == 2 && errors.As(err, &exitErr) && exitErr.ExitCode() == 113 && strings.Contains(string(b), "Could not find service") {
 				return string(b), errServiceAbsent
 			}
-			return string(b), fmt.Errorf("launchctl %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(b)))
+			return string(b), problem("launchctl %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(b)))
 		}
 		return string(b), nil
 	}
@@ -76,7 +79,7 @@ func (m *Manager) loaded(name string) (bool, error) {
 }
 func (m *Manager) available() error {
 	if _, err := m.Command("print", m.Domain); err != nil {
-		return errors.New("a macOS graphical login session is required; run this in Terminal as the logged-in user, without sudo")
+		return problem("a macOS graphical login session is required; run this in Terminal as the logged-in user, without sudo")
 	}
 	return nil
 }
@@ -131,7 +134,7 @@ func (m *Manager) snapshot() (*snapshot, error) {
 		p := m.plistPath(name)
 		paths = append(paths, p)
 		if b, err := readRegular(p); err == nil && !bytes.Contains(b, []byte("<string>"+managedMarker+"</string>")) {
-			return nil, fmt.Errorf("refusing to replace an unmanaged LaunchAgent: %s", p)
+			return nil, problem("refusing to replace an unmanaged LaunchAgent: %s", p)
 		} else if err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
@@ -142,7 +145,7 @@ func (m *Manager) snapshot() (*snapshot, error) {
 		s.loaded[name] = loaded
 		if s.loaded[name] {
 			if _, err := regular(p); err != nil {
-				return nil, fmt.Errorf("loaded service has no managed plist: %s", name)
+				return nil, problem("loaded service has no managed plist: %s", name)
 			}
 		}
 	}
@@ -200,6 +203,14 @@ func (m *Manager) restore(s *snapshot) error {
 	return errors.Join(errs...)
 }
 
+// Give every mutating operation the same explicit recovery result.
+func (m *Manager) restoreError(s *snapshot, cause error) error {
+	if restoreErr := m.restore(s); restoreErr != nil {
+		return problem("%w; rollback also failed: %v; inspect status before retrying", cause, restoreErr)
+	}
+	return problem("%w; previous service configuration restored; data and keys preserved", cause)
+}
+
 func (m *Manager) Setup(c *Config, sourceDir string) (err error) {
 	unlock, err := lock(m.Root)
 	if err != nil {
@@ -211,10 +222,10 @@ func (m *Manager) Setup(c *Config, sourceDir string) (err error) {
 	}
 	if old, e := readConfig(m.configPath()); e == nil {
 		if old.DataDir != c.DataDir {
-			return errors.New("data directory differs from existing setup; keep it unchanged to preserve server identity (manual migration requires a backup)")
+			return problem("data directory differs from existing setup; keep it unchanged to preserve server identity (manual migration requires a backup)")
 		}
 		if _, e = regular(filepath.Join(c.DataDir, "id_ed25519")); e != nil {
-			return errors.New("existing setup private key is missing; restore a backup before setup (identity will not be regenerated)")
+			return problem("existing setup private key is missing; restore a backup before setup (identity will not be regenerated)")
 		}
 	} else if !os.IsNotExist(e) {
 		return e
@@ -224,7 +235,7 @@ func (m *Manager) Setup(c *Config, sourceDir string) (err error) {
 	}
 	// .env can override keys/ports upstream. This managed mode deliberately refuses it.
 	if _, e := os.Lstat(filepath.Join(c.DataDir, ".env")); e == nil {
-		return errors.New("managed data directory contains .env; remove or migrate it before setup because upstream environment overrides can disable key checks")
+		return problem("managed data directory contains .env; remove or migrate it before setup because upstream environment overrides can disable key checks")
 	} else if !os.IsNotExist(e) {
 		return e
 	}
@@ -239,7 +250,7 @@ func (m *Manager) Setup(c *Config, sourceDir string) (err error) {
 		return err
 	}
 	if st, e := os.Lstat(m.Agents); e != nil || !st.IsDir() {
-		return errors.New("LaunchAgents directory is invalid")
+		return problem("LaunchAgents directory is invalid")
 	}
 	if err = privateDir(filepath.Join(m.Root, "logs")); err != nil {
 		return err
@@ -250,11 +261,7 @@ func (m *Manager) Setup(c *Config, sourceDir string) (err error) {
 	}
 	defer func() {
 		if err != nil {
-			if restoreErr := m.restore(s); restoreErr != nil {
-				err = fmt.Errorf("%w; rollback also failed: %v; inspect status before retrying", err, restoreErr)
-			} else {
-				err = fmt.Errorf("%w; previous service configuration restored; data and keys preserved", err)
-			}
+			err = m.restoreError(s, err)
 		}
 	}()
 	for _, name := range daemonNames {
@@ -299,26 +306,26 @@ func (m *Manager) Start() (err error) {
 	}
 	c, err := readConfig(m.configPath())
 	if err != nil {
-		return fmt.Errorf("run rustdesk-server setup first: %w", err)
+		return problem("run rustdesk-server setup first: %w", err)
 	}
 	if _, err = regular(filepath.Join(c.DataDir, "id_ed25519")); err != nil {
-		return errors.New("private key missing; restore a backup before start")
+		return problem("private key missing; restore a backup before start")
 	}
 	if err = validateIdentity(c.DataDir); err != nil {
 		return err
 	}
 	if _, e := os.Lstat(filepath.Join(c.DataDir, ".env")); e == nil {
-		return errors.New("managed data directory contains .env; refusing to start")
+		return problem("managed data directory contains .env; refusing to start")
 	} else if !os.IsNotExist(e) {
 		return e
 	}
 	for _, name := range packageNames {
 		st, e := regular(filepath.Join(m.Root, "current", name))
 		if e != nil {
-			return fmt.Errorf("runtime missing; rerun setup: %w", e)
+			return problem("runtime missing; rerun setup: %w", e)
 		}
 		if st.Mode()&0111 == 0 {
-			return fmt.Errorf("runtime %s is not executable; rerun setup", name)
+			return problem("runtime %s is not executable; rerun setup", name)
 		}
 	}
 	s, err := m.snapshot()
@@ -327,7 +334,7 @@ func (m *Manager) Start() (err error) {
 	}
 	defer func() {
 		if err != nil {
-			err = errors.Join(err, m.restore(s))
+			err = m.restoreError(s, err)
 		}
 	}()
 	if !s.loaded["hbbs"] && !s.loaded["hbbr"] {
@@ -364,7 +371,7 @@ func (m *Manager) Stop() (err error) {
 	}
 	defer func() {
 		if err != nil {
-			err = errors.Join(err, m.restore(s))
+			err = m.restoreError(s, err)
 		}
 	}()
 	for _, name := range daemonNames {
@@ -392,13 +399,13 @@ func checkPorts() error {
 	for p := 21115; p <= 21119; p++ {
 		l, err := net.Listen("tcp", net.JoinHostPort("", strconv.Itoa(p)))
 		if err != nil {
-			return fmt.Errorf("TCP port %d is unavailable; stop the other server first", p)
+			return problem("TCP port %d is unavailable; stop the other server first", p)
 		}
 		closers = append(closers, l)
 	}
 	u, err := net.ListenPacket("udp", ":21116")
 	if err != nil {
-		return errors.New("UDP port 21116 is unavailable")
+		return problem("UDP port 21116 is unavailable")
 	}
 	closers = append(closers, u)
 	return nil
@@ -440,5 +447,5 @@ func waitReady(m *Manager) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return fmt.Errorf("services did not become ready; inspect logs under %s", filepath.Join(m.Root, "logs"))
+	return problem("services did not become ready; inspect logs under %s", filepath.Join(m.Root, "logs"))
 }

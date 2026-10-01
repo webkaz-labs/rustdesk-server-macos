@@ -404,11 +404,11 @@ func TestNoPrivateKeyOutput(t *testing.T) {
 }
 func TestNonMacRefusalAndHelp(t *testing.T) {
 	var out bytes.Buffer
-	if err := Run([]string{"version"}, strings.NewReader(""), &out, "test"); err != nil {
+	if err := Run([]string{"--lang", "en", "version"}, strings.NewReader(""), &out, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.GOOS != "darwin" {
-		if err := Run([]string{"setup", "--yes", "--address", "192.168.1.2"}, strings.NewReader(""), &out, "test"); err == nil || !strings.Contains(err.Error(), "requires macOS") {
+		if err := Run([]string{"--lang", "en", "setup", "--yes", "--address", "192.168.1.2"}, strings.NewReader(""), &out, "test"); err == nil || !strings.Contains(err.Error(), "requires macOS") {
 			t.Fatal("non-Mac accepted")
 		}
 	}
