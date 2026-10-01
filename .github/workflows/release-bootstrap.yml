@@ -34,6 +34,18 @@ jobs:
         with:
           go-version: '1.27.1'
           cache: false
+      - name: Locate Go build cache
+        id: go-cache-info
+        run: |
+          echo "path=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      - name: Restore main Go build cache without saving bootstrap state
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ steps.go-cache-info.outputs.path }}
+          key: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-info.outputs.version }}-${{ hashFiles('go.mod', 'cmd/**/*.go', 'internal/**/*.go') }}
+          restore-keys: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-info.outputs.version }}-
       - name: Verify tested main, create exact tag, and explicitly dispatch release
         env:
           GH_TOKEN: ${{ github.token }}

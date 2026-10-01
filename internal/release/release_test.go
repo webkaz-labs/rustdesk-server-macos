@@ -424,6 +424,74 @@ func TestExportGitContainsCommittedSourceOnly(t *testing.T) {
 	}
 }
 
+func TestBuildNativeIsolatesSQLxSchemaFromTrackedSource(t *testing.T) {
+	script := string(releaseTestRead(t, filepath.Join("..", "..", "scripts", "build-native.sh")))
+	start := strings.Index(script, "# SQLx schema-copy setup")
+	end := strings.Index(script, "# End SQLx schema-copy setup.")
+	if start < 0 || end <= start {
+		t.Fatal("schema-copy setup block missing from native build")
+	}
+	root := t.TempDir()
+	upstream := filepath.Join(root, "upstream")
+	database := "SQLite format 3\x00committed schema bytes\x00"
+	releaseTestRepository(t, upstream, map[string]string{"db_v2.sqlite3": database})
+	commit := releaseTestGit(t, upstream, "rev-parse", "HEAD")
+	copyPath := filepath.Join(root, ".build", "build-schema-arm64.sqlite3")
+	for _, suffix := range []string{"", "-journal", "-wal", "-shm"} {
+		releaseTestWrite(t, copyPath+suffix, "stale build output", 0o644)
+	}
+	cmd := exec.Command("bash", "-euo", "pipefail", "-c", script[start:end]+"\nprintf '%s' \"$DATABASE_URL\"\n")
+	cmd.Env = append(os.Environ(), "ROOT="+root, "UPSTREAM="+upstream, "ARCH=arm64", "COMMIT="+commit,
+		"DATABASE_URL=sqlite://"+filepath.Join(upstream, "db_v2.sqlite3"))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("schema setup: %v\n%s", err, output)
+	}
+	if string(output) != "sqlite://"+copyPath {
+		t.Fatalf("DATABASE_URL does not select isolated build copy: %s", output)
+	}
+	if got := string(releaseTestRead(t, copyPath)); got != database {
+		t.Fatalf("committed schema bytes changed during copy: %q", got)
+	}
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		if _, err := os.Stat(copyPath + suffix); !os.IsNotExist(err) {
+			t.Fatalf("stale SQLite sidecar remains: %s", suffix)
+		}
+	}
+	// Simulate SQLx/SQLite header and journal writes against its selected DB.
+	releaseTestWrite(t, copyPath, "modified build copy", 0o644)
+	releaseTestWrite(t, copyPath+"-journal", "build journal", 0o644)
+	if got := string(releaseTestRead(t, filepath.Join(upstream, "db_v2.sqlite3"))); got != database {
+		t.Fatal("tracked source DB changed through build copy")
+	}
+	if dirty := releaseTestGit(t, upstream, "diff", "--name-only", "HEAD", "--"); dirty != "" {
+		t.Fatalf("schema build contaminated pinned source: %s", dirty)
+	}
+}
+
+func TestRestoredTargetCacheSurvivesFreshPinnedCheckout(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	releaseTestRepository(t, source, map[string]string{".gitignore": "/target/\n", "Cargo.lock": "locked fixture"})
+	commit := releaseTestGit(t, source, "rev-parse", "HEAD")
+	checkout := filepath.Join(root, "upstream-arm64")
+	cacheFile := filepath.Join(checkout, "target", "cached-object")
+	releaseTestWrite(t, cacheFile, "restored build object", 0o644)
+	// The native script restores only target, then initializes/fetches the source.
+	releaseTestGit(t, checkout, "init", "-q")
+	releaseTestGit(t, checkout, "fetch", "--depth=1", source, commit)
+	releaseTestGit(t, checkout, "checkout", "--detach", "FETCH_HEAD")
+	if got := string(releaseTestRead(t, cacheFile)); got != "restored build object" {
+		t.Fatal("source checkout removed restored compiler output")
+	}
+	if got := releaseTestGit(t, checkout, "rev-parse", "HEAD"); got != commit {
+		t.Fatalf("checkout commit = %s", got)
+	}
+	if dirty := releaseTestGit(t, checkout, "status", "--porcelain"); dirty != "" {
+		t.Fatalf("restored target polluted tracked source: %s", dirty)
+	}
+}
+
 func TestCollectLicensesPreservesDeclarationsAndNotices(t *testing.T) {
 	root := t.TempDir()
 	crate := filepath.Join(root, "crate")
@@ -632,7 +700,7 @@ func releaseTestMockBuild(t *testing.T, tool *Tool, upstream string) *[]releaseT
 			if cwd == upstream {
 				return " " + releaseTestCommon + " libs/hbb_common (fixture)", nil
 			}
-		case "git diff HEAD --":
+		case "git diff --name-only HEAD --":
 			if cwd == upstream || cwd == filepath.Join(upstream, "libs/hbb_common") {
 				return "", nil
 			}
@@ -906,8 +974,8 @@ func TestCheckUpstreamRejectsDriftAndUninitializedSubmodules(t *testing.T) {
 						return "invalid", nil
 					}
 				}
-				if command == "git diff HEAD --" && ((failure == "dirty-upstream" && cwd == upstream) || (failure == "dirty-submodule" && cwd != upstream)) {
-					return "diff fixture", nil
+				if command == "git diff --name-only HEAD --" && ((failure == "dirty-upstream" && cwd == upstream) || (failure == "dirty-submodule" && cwd != upstream)) {
+					return "db_v2.sqlite3\nsrc/fixture.rs", nil
 				}
 				return original(cwd, name, args...)
 			}
@@ -919,6 +987,9 @@ func TestCheckUpstreamRejectsDriftAndUninitializedSubmodules(t *testing.T) {
 			err := tool.CheckUpstream(upstream)
 			if (err == nil) != (failure == "none") {
 				t.Fatalf("CheckUpstream failure=%s: %v", failure, err)
+			}
+			if strings.HasPrefix(failure, "dirty-") && (!strings.Contains(err.Error(), "db_v2.sqlite3") || !strings.Contains(err.Error(), "src/fixture.rs")) {
+				t.Fatalf("modified filenames absent from diagnostic: %v", err)
 			}
 		})
 	}

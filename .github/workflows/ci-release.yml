@@ -25,11 +25,31 @@ jobs:
         with:
           go-version: '1.27.1'
           cache: false
+      - name: Locate Go build cache
+        id: go-cache-info
+        run: |
+          echo "path=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go build cache
+        id: go-cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ steps.go-cache-info.outputs.path }}
+          key: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-info.outputs.version }}-${{ hashFiles('go.mod', 'cmd/**/*.go', 'internal/**/*.go') }}
+          restore-keys: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-info.outputs.version }}-
       - name: Unit tests and packaging checks
         run: |
           go test -race ./...
           go vet ./...
           for script in scripts/*.sh; do bash -n "$script"; done
+      - name: Save Go build cache from successful main push
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ steps.go-cache-info.outputs.path }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   native:
     needs: unit
@@ -56,6 +76,51 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: '1.98.1'
+      - name: Identify compiler caches and actual Apple build environment
+        id: cache-info
+        run: |
+          set -euo pipefail
+          echo "go-path=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "go-version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+          {
+            sw_vers -productVersion
+            xcodebuild -version
+            xcrun --show-sdk-version
+            xcrun clang --version
+            rustc --version --verbose
+          } | tee "$RUNNER_TEMP/rust-build-environment.txt"
+          echo "apple-toolchain=$(shasum -a 256 "$RUNNER_TEMP/rust-build-environment.txt" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - name: Restore Go build cache
+        id: go-cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ steps.cache-info.outputs.go-path }}
+          key: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-info.outputs.go-version }}-${{ hashFiles('go.mod', 'cmd/**/*.go', 'internal/**/*.go') }}
+          restore-keys: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-info.outputs.go-version }}-
+      - name: Restore pinned Rust dependencies and native target
+        id: rust-cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+            .build/upstream-arm64/target
+          # upstream.json binds the exact Cargo.lock through its pinned upstream
+          # commit, plus submodules, Rust toolchain and minimum macOS. No broad
+          # fallback is allowed across source/compiler/SDK/build-setting changes.
+          key: rust-build-v1-${{ runner.os }}-${{ runner.arch }}-aarch64-apple-darwin-${{ hashFiles('upstream.json', 'scripts/build-native.sh', '.github/workflows/ci-release.yml') }}-${{ steps.cache-info.outputs.apple-toolchain }}
+      - name: Report cache restore decisions
+        env:
+          GO_HIT: ${{ steps.go-cache.outputs.cache-hit }}
+          GO_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
+          RUST_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+          RUST_KEY: ${{ steps.rust-cache.outputs.cache-matched-key }}
+        run: |
+          printf 'Go cache exact hit: %s; restored key: %s\n' "${GO_HIT:-false}" "${GO_KEY:-none}"
+          printf 'Rust cache exact hit: %s; restored key: %s\n' "${RUST_HIT:-false}" "${RUST_KEY:-none}"
       - name: Native build, architecture/dependency audit, isolated launchd smoke
         env:
           PACKAGE_SOURCE: ${{ matrix.source }}
@@ -74,6 +139,24 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 14
+      - name: Save Rust cache after successful main build and packaging
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+            .build/upstream-arm64/target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+      - name: Save Go build cache after successful main native job
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ steps.cache-info.outputs.go-path }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   release:
     needs: native
@@ -91,6 +174,18 @@ jobs:
         with:
           go-version: '1.27.1'
           cache: false
+      - name: Locate Go build cache
+        id: go-cache-info
+        run: |
+          echo "path=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      - name: Restore main Go build cache without saving release state
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ steps.go-cache-info.outputs.path }}
+          key: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-info.outputs.version }}-${{ hashFiles('go.mod', 'cmd/**/*.go', 'internal/**/*.go') }}
+          restore-keys: go-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-cache-info.outputs.version }}-
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: native-*

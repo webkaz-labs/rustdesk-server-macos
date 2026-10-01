@@ -383,13 +383,15 @@ by this workflow. Toolchains and Apple's system SDK are external prerequisites.
 
 After installing prerequisites:
   cd upstream
-  MACOSX_DEPLOYMENT_TARGET=%s cargo +%s build --release --locked --offline --target aarch64-apple-darwin --bin hbbs --bin hbbr
+  cp db_v2.sqlite3 ../build-schema.sqlite3
+  DATABASE_URL="sqlite://$(cd .. && pwd)/build-schema.sqlite3" MACOSX_DEPLOYMENT_TARGET=%s cargo +%s build --release --locked --offline --target aarch64-apple-darwin --bin hbbs --bin hbbr
   cd ../distribution
   CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -ldflags '-s -w -X main.version=%s' -o rustdesk-server ./cmd/rustdesk-server
 
 The distribution's Go tooling documents packaging, Mach-O checks, source export,
 and Packslip signing. Upstream's tracked sample .env and db_v2.sqlite3 remain in
-its source snapshot; neither ships in an installable binary archive.
+its source snapshot; neither ships in an installable binary archive. The separate
+build-schema.sqlite3 is disposable: SQLx compile-time macros may update it.
 
 RustDesk Server is licensed under AGPL-3.0. See upstream/LICENSE and all dependency
 notices. The helper's license is distribution/LICENSE. This source archive is

@@ -11,6 +11,10 @@ independent of the upstream RustDesk Server version.
 to `83419b6549636ee39dacef7776c473f5802e08d6`. Fetches use the full commit, recursive
 submodules are checked against the recorded map, and every Cargo build uses the
 upstream `Cargo.lock` with `--locked`. A changed lockfile fails the build.
+SQLx compile-time query checks use a disposable `.build/build-schema-arm64.sqlite3`
+copied from the pinned commit, through an explicit `DATABASE_URL`. This keeps
+SQLite header/journal writes outside the tracked upstream source. The strict
+source-cleanliness check remains enabled and reports modified filenames.
 
 The toolchains are Rust `1.98.1` and Go `1.27.1`. Changing either is an explicit
 maintenance change: update `upstream.json` and workflow setup inputs together.
@@ -34,6 +38,33 @@ compatibility. Intel artifacts are not built or published.
 Project-authored application and release tooling use Go's standard library.
 Upstream server code remains Rust; small shell scripts coordinate native commands.
 There is no Python build or runtime dependency in this distribution's tooling.
+
+### Compiler caches
+
+Pinned `actions/cache/restore` and `actions/cache/save` actions reuse Cargo registry
+sources, Git dependency databases/checkouts, and `.build/upstream-arm64/target`.
+The Rust key includes OS/CPU, the native target, source/submodule/toolchain/minimum-OS
+pins, build-script/workflow hashes, and the actual macOS/Xcode/SDK/clang/rustc
+fingerprint. The exact pinned upstream commit fixes `Cargo.lock`; its lockfile is
+still checked with `--locked`. Rust caches have no broad fallback across these
+inputs. A restored target directory may exist before the upstream Git checkout;
+the build initializes Git alongside it and still verifies every source pin.
+
+Go caches the directory reported by `go env GOCACHE`, keyed by OS, CPU, actual Go
+version and Go-source/module hashes. Compatible earlier source-cache entries may
+warm a changed build; Go's own content checks decide which entries can be reused.
+No `go.sum` or third-party Go module is required. Unit/native jobs populate the
+caches; bootstrap and release jobs only restore them.
+
+Only successful `push` jobs on `main` save caches, after their tests/build/audits
+and (for native jobs) source packaging and artifact upload finish. PRs, manual
+dispatches and tag releases never save. GitHub's branch/ref cache isolation lets
+tag releases restore default-branch caches while excluding PR merge-ref caches.
+Credentials, GitHub tokens, server keys, databases and release-signing material
+are not cache paths. A miss or cache-service failure falls back to a cold build;
+no build, lockfile, native audit or signing check is skipped. GitHub may evict
+unused caches. Cache restore logs identify exact/partial hits; claim a speedup
+only after comparing successful build timings, not merely after adding caching.
 
 ## What CI checks
 
@@ -177,3 +208,5 @@ a release is runnable; configuration review alone is not native build evidence.
 - [Exact action source used](https://github.com/jdx/packslip/blob/87479dfc6443253dff69601cace5fc6ea07e6df5/action.yml)
 - [GitHub's GITHUB_TOKEN workflow-dispatch exception](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)
 - [Workflow dispatch API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)
+- [Pinned cache restore/save action](https://github.com/actions/cache/tree/55cc8345863c7cc4c66a329aec7e433d2d1c52a9)
+- [GitHub cache matching and branch isolation](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)

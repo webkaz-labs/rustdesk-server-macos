@@ -39,6 +39,14 @@ fi
 test "$(git -C "$UPSTREAM" rev-parse HEAD)" = "$COMMIT"
 git -C "$UPSTREAM" submodule update --init --recursive
 "$TOOL" check-upstream "$UPSTREAM"
+# SQLx schema-copy setup (outside the strictly checked upstream checkout).
+# Compile-time query macros may change SQLite headers/journals. Always give
+# them a disposable copy of the committed schema, never upstream's tracked DB.
+BUILD_SCHEMA="$ROOT/.build/build-schema-$ARCH.sqlite3"
+rm -f "$BUILD_SCHEMA" "$BUILD_SCHEMA-journal" "$BUILD_SCHEMA-wal" "$BUILD_SCHEMA-shm"
+git -C "$UPSTREAM" show "$COMMIT:db_v2.sqlite3" > "$BUILD_SCHEMA"
+export DATABASE_URL="sqlite://$BUILD_SCHEMA"
+# End SQLx schema-copy setup.
 # Never set SODIUM_USE_PKG_CONFIG: libsodium-sys builds its bundled source.
 unset SODIUM_USE_PKG_CONFIG SODIUM_LIB_DIR SODIUM_SHARED
 (

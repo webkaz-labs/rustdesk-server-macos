@@ -141,12 +141,12 @@ func (t *Tool) CheckUpstream(upstream string) error {
 		paths = append(paths, filepath.Join(upstream, path))
 	}
 	for _, path := range paths {
-		diff, err := t.run(path, "git", "diff", "HEAD", "--")
+		diff, err := t.run(path, "git", "diff", "--name-only", "HEAD", "--")
 		if err != nil {
 			return err
 		}
 		if diff != "" {
-			return fmt.Errorf("tracked upstream source modified: %s", path)
+			return fmt.Errorf("tracked upstream source modified in %s: %s", path, strings.ReplaceAll(diff, "\n", ", "))
 		}
 	}
 	return requireFile(filepath.Join(upstream, "Cargo.lock"))
