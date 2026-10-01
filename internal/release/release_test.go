@@ -706,8 +706,12 @@ func releaseTestMockBuild(t *testing.T, tool *Tool, upstream string) *[]releaseT
 			}
 		case "go version":
 			return "go version go1.27.1 darwin/arm64", nil
+		case "go env GOROOT":
+			return filepath.Join(tool.Root, "go-toolchain"), nil
 		case "rustc +1.98.1 --version --verbose":
 			return "rustc 1.98.1 (fixture)\nhost: aarch64-apple-darwin", nil
+		case "rustc +1.98.1 --print sysroot":
+			return filepath.Join(tool.Root, "rust-toolchain"), nil
 		case "sw_vers -productVersion":
 			return "26.0", nil
 		case "xcodebuild -version":
@@ -728,6 +732,11 @@ func releaseTestMetadataFixture(t *testing.T) (*Tool, string, string, string) {
 	releaseTestWrite(t, filepath.Join(upstream, "Cargo.lock"), "locked fixture", 0o644)
 	releaseTestWrite(t, filepath.Join(upstream, "LICENSE"), "upstream license", 0o644)
 	releaseTestWrite(t, filepath.Join(tool.Root, "LICENSE"), "distribution license", 0o644)
+	releaseTestWrite(t, filepath.Join(tool.Root, "go-toolchain", "LICENSE"), "Go license", 0o644)
+	releaseTestWrite(t, filepath.Join(tool.Root, "go-toolchain", "src", "vendor", "example", "NOTICE"), "Go vendor notice", 0o644)
+	for _, rel := range []string{"COPYRIGHT-library.html", "licenses/MIT.txt", "licenses/Apache-2.0.txt"} {
+		releaseTestWrite(t, filepath.Join(tool.Root, "rust-toolchain", "share", "doc", "rust", rel), "Rust "+rel, 0o644)
+	}
 	for _, name := range binaryNames {
 		releaseTestWrite(t, filepath.Join(stage, "bin", name), "binary fixture: "+name, 0o755)
 	}
@@ -871,7 +880,7 @@ func TestMetadataTargetFilterBinaryHashesAndBuildEvidence(t *testing.T) {
 			t.Errorf("source hash mismatch for %s", name)
 		}
 	}
-	for file, want := range map[string]string{"Cargo.lock": "locked fixture", "licenses/AGPL-3.0-upstream.txt": "upstream license", "licenses/distribution-LICENSE.txt": "distribution license"} {
+	for file, want := range map[string]string{"Cargo.lock": "locked fixture", "licenses/AGPL-3.0-upstream.txt": "upstream license", "licenses/distribution-LICENSE.txt": "distribution license", "licenses/go/LICENSE": "Go license", "licenses/go/src/vendor/example/NOTICE": "Go vendor notice", "licenses/rust/COPYRIGHT-library.html": "Rust COPYRIGHT-library.html", "licenses/rust/licenses/MIT.txt": "Rust licenses/MIT.txt", "licenses/rust/licenses/Apache-2.0.txt": "Rust licenses/Apache-2.0.txt"} {
 		if got := string(releaseTestRead(t, filepath.Join(out, file))); got != want {
 			t.Errorf("%s = %q, want %q", file, got, want)
 		}
@@ -907,12 +916,20 @@ func TestMetadataRejectsUnsupportedArchitecturesBeforeCommands(t *testing.T) {
 }
 
 func TestMetadataRejectsMissingAssetsAndUnresolvedGraph(t *testing.T) {
-	for _, failure := range []string{"binary", "root", "root-package", "malformed", "toolchain"} {
+	for _, failure := range []string{"binary", "root", "root-package", "malformed", "toolchain", "go-license", "rust-license"} {
 		t.Run(failure, func(t *testing.T) {
 			tool, upstream, metadata, stage := releaseTestMetadataFixture(t)
 			switch failure {
 			case "binary":
 				if err := os.Remove(filepath.Join(stage, "bin", "hbbr")); err != nil {
+					t.Fatal(err)
+				}
+			case "go-license":
+				if err := os.Remove(filepath.Join(tool.Root, "go-toolchain", "LICENSE")); err != nil {
+					t.Fatal(err)
+				}
+			case "rust-license":
+				if err := os.Remove(filepath.Join(tool.Root, "rust-toolchain", "share", "doc", "rust", "COPYRIGHT-library.html")); err != nil {
 					t.Fatal(err)
 				}
 			case "root":
@@ -1134,6 +1151,107 @@ func TestExtractSourceRejectsSymlinkDestinationRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, "file")); !os.IsNotExist(err) {
 		t.Error("archive wrote through symlink extraction root")
+	}
+}
+
+func TestCollectGoLicensesPreservesStandardLibraryNotices(t *testing.T) {
+	root, out := t.TempDir(), t.TempDir()
+	want := map[string]string{
+		"LICENSE": "Go root license", "PATENTS": "Go patent grant",
+		"src/vendor/golang.org/x/crypto/LICENSE":             "vendor license",
+		"src/vendor/golang.org/x/crypto/PATENTS":             "vendor patent grant",
+		"src/vendor/example/nested/NOTICE.txt":               "nested notice",
+		"src/crypto/internal/boring/LICENSE":                 "crypto license",
+		"src/math/log1p.go":                                  "// Sun copyright and permission notice\npackage math\n",
+		"src/crypto/internal/fips140/edwards25519/scalar.go": "// Fiat-crypto notice\npackage edwards25519\n",
+	}
+	for path, contents := range want {
+		releaseTestWrite(t, filepath.Join(root, path), contents, 0o644)
+	}
+	for _, path := range []string{"src/cmd/vendor/example/LICENSE", "src/runtime/testdata/example/NOTICE", "src/vendor/example/ordinary.go"} {
+		releaseTestWrite(t, filepath.Join(root, path), "excluded", 0o644)
+	}
+	if err := collectGoLicenses(root, out); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := filepath.WalkDir(out, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(out, path)
+		if err != nil {
+			return err
+		}
+		got = append(got, filepath.ToSlash(rel))
+		if contents := string(releaseTestRead(t, path)); contents != want[filepath.ToSlash(rel)] {
+			t.Errorf("unexpected notice %s: %q", rel, contents)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Go notice inventory: %v", got)
+	}
+}
+
+func TestCollectGoLicensesRequiresRootLicense(t *testing.T) {
+	root, out := t.TempDir(), t.TempDir()
+	releaseTestWrite(t, filepath.Join(root, "src", "vendor", "example", "LICENSE"), "vendor license", 0o644)
+	if err := collectGoLicenses(root, out); err == nil || !strings.Contains(err.Error(), "mandatory Go LICENSE") {
+		t.Fatalf("missing root license accepted: %v", err)
+	}
+	releaseTestWrite(t, filepath.Join(root, "LICENSE"), "Go license", 0o644)
+	if err := collectGoLicenses(root, out); err != nil {
+		t.Fatalf("optional PATENTS missing: %v", err)
+	}
+}
+
+func TestCollectGoLicensesRejectsEscapingNotice(t *testing.T) {
+	root, out, elsewhere := t.TempDir(), t.TempDir(), t.TempDir()
+	releaseTestWrite(t, filepath.Join(root, "LICENSE"), "Go license", 0o644)
+	releaseTestWrite(t, filepath.Join(elsewhere, "NOTICE"), "outside", 0o644)
+	if err := os.MkdirAll(filepath.Join(root, "src", "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(elsewhere, "NOTICE"), filepath.Join(root, "src", "vendor", "NOTICE")); err != nil {
+		t.Fatal(err)
+	}
+	if err := collectGoLicenses(root, out); err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("escaping notice accepted: %v", err)
+	}
+}
+
+func TestCollectRustLicensesPreservesInstalledNotices(t *testing.T) {
+	root, out := t.TempDir(), t.TempDir()
+	files := []string{"COPYRIGHT-library.html", "COPYRIGHT", "licenses/MIT.txt", "licenses/Apache-2.0.txt", "licenses/Unicode-3.0.txt"}
+	for _, rel := range files {
+		releaseTestWrite(t, filepath.Join(root, "share", "doc", "rust", rel), "notice "+rel, 0o644)
+	}
+	if err := collectRustLicenses(root, out); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range files {
+		if got := string(releaseTestRead(t, filepath.Join(out, rel))); got != "notice "+rel {
+			t.Errorf("Rust notice %s changed: %q", rel, got)
+		}
+	}
+}
+
+func TestCollectRustLicensesRequiresStandardLibraryNotices(t *testing.T) {
+	for _, missing := range []string{"COPYRIGHT-library.html", "licenses/MIT.txt", "licenses/Apache-2.0.txt"} {
+		t.Run(missing, func(t *testing.T) {
+			root, out := t.TempDir(), t.TempDir()
+			for _, rel := range []string{"COPYRIGHT-library.html", "licenses/MIT.txt", "licenses/Apache-2.0.txt"} {
+				if rel != missing {
+					releaseTestWrite(t, filepath.Join(root, "share", "doc", "rust", rel), "notice "+rel, 0o644)
+				}
+			}
+			if err := collectRustLicenses(root, out); err == nil || !strings.Contains(err.Error(), "mandatory Rust notice "+missing) {
+				t.Fatalf("missing Rust notice accepted: %v", err)
+			}
+		})
 	}
 }
 

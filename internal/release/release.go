@@ -346,6 +346,20 @@ func (t *Tool) Metadata(upstream, metadataFile, stage, version, arch string) err
 	if err := collectLicenses(packages, filepath.Join(out, "licenses")); err != nil {
 		return err
 	}
+	goRoot, err := t.run(t.Root, "go", "env", "GOROOT")
+	if err != nil {
+		return err
+	}
+	if err := collectGoLicenses(goRoot, filepath.Join(out, "licenses", "go")); err != nil {
+		return fmt.Errorf("collect Go standard-library notices: %w", err)
+	}
+	rustRoot, err := t.run(t.Root, "rustc", "+"+t.Pin.Rust, "--print", "sysroot")
+	if err != nil {
+		return err
+	}
+	if err := collectRustLicenses(rustRoot, filepath.Join(out, "licenses", "rust")); err != nil {
+		return fmt.Errorf("collect Rust standard-library notices: %w", err)
+	}
 	for _, paths := range [][2]string{
 		{filepath.Join(upstream, "LICENSE"), filepath.Join(out, "licenses", "AGPL-3.0-upstream.txt")},
 		{filepath.Join(t.Root, "LICENSE"), filepath.Join(out, "licenses", "distribution-LICENSE.txt")},
@@ -423,6 +437,122 @@ func (t *Tool) Metadata(upstream, metadataFile, stage, version, arch string) err
 	return writeJSON(filepath.Join(out, "bom.cdx.json"), bom)
 }
 
+// collectGoLicenses includes notices for the statically linked Go standard
+// library, preserving paths from the exact toolchain used to build the helper.
+func collectGoLicenses(root, out string) error {
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("Go root must be absolute: %q", root)
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	copyNotice := func(path string) error {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return err
+		}
+		if !within(root, resolved) {
+			return fmt.Errorf("Go notice escapes toolchain root: %s", path)
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if err := requireFile(resolved); err != nil {
+			return err
+		}
+		return copyFile(resolved, filepath.Join(out, rel))
+	}
+	if err := copyNotice(filepath.Join(root, "LICENSE")); err != nil {
+		return fmt.Errorf("mandatory Go LICENSE: %w", err)
+	}
+	patents := filepath.Join(root, "PATENTS")
+	if _, err := os.Lstat(patents); err == nil {
+		if err := copyNotice(patents); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	// These standard-library sources carry additional embedded third-party
+	// notices. Preserve entire files so no permission or attribution is omitted.
+	for _, rel := range []string{
+		"src/math/acosh.go", "src/math/asinh.go", "src/math/atanh.go", "src/math/cbrt.go",
+		"src/math/erf.go", "src/math/exp.go", "src/math/expm1.go", "src/math/j0.go",
+		"src/math/j1.go", "src/math/jn.go", "src/math/lgamma.go", "src/math/log.go",
+		"src/math/log1p.go", "src/math/remainder.go", "src/math/sqrt.go",
+		"src/math/atan.go", "src/math/gamma.go", "src/math/sin.go", "src/math/tan.go", "src/math/tanh.go",
+		"src/crypto/internal/fips140/edwards25519/scalar.go", "src/crypto/internal/fips140/aes/aes_generic.go",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if _, err := os.Lstat(path); err == nil {
+			if err := copyNotice(path); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	source := filepath.Join(root, "src")
+	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path == filepath.Join(source, "cmd") || entry.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := strings.ToUpper(entry.Name())
+		for _, prefix := range []string{"LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "UNLICENSE", "PATENTS"} {
+			if strings.HasPrefix(name, prefix) {
+				return copyNotice(path)
+			}
+		}
+		return nil
+	})
+}
+
+func collectRustLicenses(root, out string) error {
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("Rust sysroot must be absolute: %q", root)
+	}
+	docs := filepath.Join(root, "share", "doc", "rust")
+	// Rust 1.98.1's compiler component installs the REUSE license texts here;
+	// LICENSE-MIT/APACHE at the tarball root are non-installed overlay files.
+	for _, rel := range []string{"COPYRIGHT-library.html", "licenses/MIT.txt", "licenses/Apache-2.0.txt"} {
+		if err := requireFile(filepath.Join(docs, filepath.FromSlash(rel))); err != nil {
+			return fmt.Errorf("mandatory Rust notice %s: %w", rel, err)
+		}
+	}
+	for _, name := range []string{"COPYRIGHT-library.html", "COPYRIGHT", "LICENSE-MIT", "LICENSE-APACHE"} {
+		path := filepath.Join(docs, name)
+		if _, err := os.Lstat(path); err == nil {
+			if err := copyFile(path, filepath.Join(out, name)); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	// Keep every installed license text alongside the generated inventory.
+	return filepath.WalkDir(filepath.Join(docs, "licenses"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("Rust notice is not a regular file: %s", path)
+		}
+		rel, err := filepath.Rel(docs, path)
+		if err != nil {
+			return err
+		}
+		return copyFile(path, filepath.Join(out, rel))
+	})
+}
+
 func collectLicenses(packages []cargoPackage, out string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
@@ -482,7 +612,7 @@ func collectLicenses(packages []cargoPackage, out string) error {
 	if err := writeJSON(filepath.Join(out, "index.json"), records); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(out, "README.txt"), []byte("License declarations are package authors' Cargo metadata. Available top-level\nlicense and notice files are copied here; this is not a legal conclusion.\nSee the matching complete source archive for nested notices, bundled C sources,\nand the full source of registry and Git dependencies. Some packages do not\nship separate license files; index.json records those entries explicitly.\n"), 0o644)
+	return os.WriteFile(filepath.Join(out, "README.txt"), []byte("License declarations are package authors' Cargo metadata. Available top-level\nlicense and notice files are copied here; this is not a legal conclusion.\nSee the matching complete source archive for nested notices, bundled C sources,\nand the full source of registry and Git dependencies. Some packages do not\nship separate license files; index.json records those entries explicitly.\nThe go/ directory contains Go's root license, standard-library and vendor\nnotices, and source files with additional embedded notices at original paths.\nThe rust/ directory contains the installed Rust toolchain's standard-library\ncopyright inventory and license texts. These notices conservatively include\ncomponents that may be removed by target selection or linker optimization.\n"), 0o644)
 }
 
 func (t *Tool) Manifest(version string) error {
