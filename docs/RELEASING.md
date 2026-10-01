@@ -129,7 +129,7 @@ release operations and require the repository owner's authorization.
 ### Start a release through GitHub's Run workflow button
 
 Use **Start release from tested main** (`release-bootstrap.yml`) with branch
-**main**, `release_tag` such as `v0.1.0`, and `tested_commit` containing the full
+**main**, `release_tag` such as `v0.1.1`, and `tested_commit` containing the full
 40-character main commit SHA. That SHA must equal the bootstrap run's own
 `github.sha`; if main advances before dispatch, first wait for the new commit's CI
 and use its SHA instead. The bootstrap workflow itself must already be on main.
@@ -185,7 +185,7 @@ codesign, and loader checks cannot. On a Mac with the pinned toolchains and Xcod
 ```sh
 go test -race ./...
 go vet ./...
-PACKAGE_SOURCE=1 scripts/build-native.sh 0.1.0 arm64
+PACKAGE_SOURCE=1 scripts/build-native.sh 0.1.1 arm64
 ```
 
 The source export uses committed distribution files. Commit the intended changes

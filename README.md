@@ -11,12 +11,12 @@ RustDesk OSS Server の `hbbs` / `hbbr` を macOS 向けにビルドし、mise �
 
 ## インストールして起動
 
-**リリース状況:** [v0.1.0](https://github.com/webkaz-labs/rustdesk-server-macos/releases/tag/v0.1.0) を公開済みです。[リリース CI](https://github.com/webkaz-labs/rustdesk-server-macos/actions/runs/36761715023) で macOS 26 / Apple Silicon のネイティブビルド、単体・launchd テスト、署名検証、公開パッケージの mise / Packslip インストールが成功しました。実クライアント間の接続や Tailscale 経由のエンドツーエンド接続は未検証です。
+**リリース状況:** v0.1.1 の公開準備中です。以下のインストール手順は [Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases) に v0.1.1 が公開されてから利用できます。実クライアント間の接続や Tailscale 経由のエンドツーエンド接続は未検証です。
 
 [mise](https://mise.jdx.dev/getting-started.html) を導入・有効化済みの Mac で実行します。Packslip 対応の新しい mise が必要です（CI の固定版は 2026.9.18）。
 
 ```sh
-mise use -g packslip:github.com/webkaz-labs/rustdesk-server-macos@0.1.0
+mise use -g packslip:github.com/webkaz-labs/rustdesk-server-macos@0.1.1
 rustdesk-server setup
 ```
 
@@ -86,7 +86,7 @@ LaunchAgent は `~/Library/LaunchAgents/com.webkaz-labs.rustdesk-server.{hbbs,hb
 
 ## トラブルシューティング
 
-- **コマンドがない**: mise が現在のシェルで有効か確認します。`mise exec packslip:github.com/webkaz-labs/rustdesk-server-macos@0.1.0 -- rustdesk-server setup` でも実行できます
+- **コマンドがない**: mise が現在のシェルで有効か確認します。`mise exec packslip:github.com/webkaz-labs/rustdesk-server-macos@0.1.1 -- rustdesk-server setup` でも実行できます
 - **リリース直後に取得できない**: mise の既定の最小リリース経過時間は **24 時間**です。公開後の最初の 24 時間は取得が保留される場合があるため、経過後に再実行してください。レート制限が適用される場合もあります。[Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases) と [mise Packslip の説明](https://mise.jdx.dev/dev-tools/backends/packslip.html) を確認し、経過時間の保護設定をグローバルに無効化したり、署名検証を無効化したりしないでください
 - **macOS が実行をブロックする**: この配布は ad-hoc 署名のみで、公証されていません。署名・取得元を確認して macOS の通常の許可フローを使ってください。Gatekeeper の全体無効化は不要です
 - **GUI ログインが必要と表示される**: Mac にログインした本人の Terminal で、`sudo` を付けずに実行します

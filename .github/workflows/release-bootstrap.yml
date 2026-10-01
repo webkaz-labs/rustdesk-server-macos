@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'New release tag, for example v0.1.0'
+        description: 'New release tag, for example v0.1.1'
         type: string
         required: true
       tested_commit:
