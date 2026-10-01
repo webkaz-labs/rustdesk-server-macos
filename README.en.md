@@ -11,7 +11,7 @@ This project builds the RustDesk OSS Server binaries, `hbbs` and `hbbr`, for mac
 
 ## Install and start
 
-**Release status:** v0.1.1 is being prepared. The installation commands below will be available after v0.1.1 appears in [Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases). End-to-end connections between real clients, including connections over Tailscale, remain unverified.
+**Release status:** [v0.1.1](https://github.com/webkaz-labs/rustdesk-server-macos/releases/tag/v0.1.1) is published. The [release CI run](https://github.com/webkaz-labs/rustdesk-server-macos/actions/runs/36800785882) passed native builds on macOS 26 / Apple Silicon, unit and launchd tests, signature verification, and installation of the published package through mise / Packslip. End-to-end connections between real clients, including connections over Tailscale, remain unverified.
 
 Run these commands on a Mac with [mise](https://mise.jdx.dev/getting-started.html) already installed and activated. A recent version of mise with Packslip support is required (the version pinned for CI is 2026.9.18).
 

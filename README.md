@@ -11,7 +11,7 @@ RustDesk OSS Server の `hbbs` / `hbbr` を macOS 向けにビルドし、mise �
 
 ## インストールして起動
 
-**リリース状況:** v0.1.1 の公開準備中です。以下のインストール手順は [Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases) に v0.1.1 が公開されてから利用できます。実クライアント間の接続や Tailscale 経由のエンドツーエンド接続は未検証です。
+**リリース状況:** [v0.1.1](https://github.com/webkaz-labs/rustdesk-server-macos/releases/tag/v0.1.1) を公開済みです。[リリース CI](https://github.com/webkaz-labs/rustdesk-server-macos/actions/runs/36800785882) で macOS 26 / Apple Silicon のネイティブビルド、単体・launchd テスト、署名検証、公開パッケージの mise / Packslip インストールが成功しました。実クライアント間の接続や Tailscale 経由のエンドツーエンド接続は未検証です。
 
 [mise](https://mise.jdx.dev/getting-started.html) を導入・有効化済みの Mac で実行します。Packslip 対応の新しい mise が必要です（CI の固定版は 2026.9.18）。
 
