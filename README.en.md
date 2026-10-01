@@ -11,7 +11,7 @@ This project builds the RustDesk OSS Server binaries, `hbbs` and `hbbr`, for mac
 
 ## Install and start
 
-**Release status:** `v0.1.0` is the planned version and has not been published yet. The instructions below describe installation after publication. Verification of the full native macOS CI workflow and installation of the published release through mise is not yet complete.
+**Release status:** [v0.1.0](https://github.com/webkaz-labs/rustdesk-server-macos/releases/tag/v0.1.0) is published. The [release CI run](https://github.com/webkaz-labs/rustdesk-server-macos/actions/runs/36761715023) passed native builds on macOS 26 / Apple Silicon, unit and launchd tests, signature verification, and installation of the published package through mise / Packslip. End-to-end connections between real clients, including connections over Tailscale, remain unverified.
 
 Run these commands on a Mac with [mise](https://mise.jdx.dev/getting-started.html) already installed and activated. A recent version of mise with Packslip support is required (the version pinned for CI is 2026.9.18).
 
@@ -87,7 +87,7 @@ Changing the data location of an existing setup is rejected to prevent accidenta
 ## Troubleshooting
 
 - **Command not found:** Check that mise is activated in your current shell. You can also run `mise exec packslip:github.com/webkaz-labs/rustdesk-server-macos@0.1.0 -- rustdesk-server setup`
-- **Unable to download a newly published release:** mise's minimum release-age requirement or rate limits may apply. Check the completed release under [Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases) and the [mise Packslip documentation](https://mise.jdx.dev/dev-tools/backends/packslip.html). Do not disable signature verification
+- **Unable to download a newly published release:** mise's default minimum release age is **24 hours**. Installation may be held back during the first 24 hours after publication; retry after that period. Rate limits may also apply. Check [Releases](https://github.com/webkaz-labs/rustdesk-server-macos/releases) and the [mise Packslip documentation](https://mise.jdx.dev/dev-tools/backends/packslip.html). Do not globally disable release-age protection or disable signature verification
 - **macOS blocks execution:** This distribution uses ad-hoc signing only and is not notarized. Verify its signatures and source, then use macOS's normal approval flow. You do not need to disable Gatekeeper globally
 - **A GUI login is required:** Run the command without `sudo` in Terminal as the user who is logged in to the Mac
 - **Port already in use:** Check for conflicts with an existing RustDesk Server, Docker, or another service. Stop the unneeded instance before trying again
